@@ -1,0 +1,19 @@
+{
+  "name": "robo-pix-extractor",
+  "version": "1.0.0",
+  "description": "Robô independente para extração de PIX e atualização de Heartbeat",
+  "main": "dist/rpaWorker.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/rpaWorker.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "puppeteer": "^22.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}
