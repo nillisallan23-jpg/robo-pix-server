@@ -60,10 +60,10 @@ export async function executarRobo() {
       const page = await browser.newPage();
       
       // LOGICA DE NAVEGAÇÃO (Adicione aqui o seu page.goto())
-      // await page.goto(banco.url_login); 
+      await page.goto(banco.url_login); 
 
       // BUSCA DINÂMICA: O robô procura pelo elemento que contém as palavras de autorização
-      const linkAutenticacao = await page.evaluate(() => {
+        const linkAutenticacao = await page.evaluate(() => {
         const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
         const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
         
