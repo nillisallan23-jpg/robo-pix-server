@@ -4,7 +4,6 @@
   "description": "Robô independente para extração de PIX e atualização de Heartbeat",
   "main": "dist/rpaWorker.js",
   "scripts": {
-    "build": "npx tsc",
     "start": "node dist/rpaWorker.js"
   },
   "dependencies": {
