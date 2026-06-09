@@ -1,109 +1,98 @@
 import puppeteer from 'puppeteer';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import QRCode from 'qrcode';
 
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
-
-// ID fixo do heartbeat com os 36 caracteres completos para o UUID do banco
-const HEARTBEAT_ID = '00000000-0000-0000-0000-000000000000';
-
-// Trava de segurança para evitar execuções sobrepostas
 let isExecuting = false;
 
-/**
- * Envia os logs de execução direto para a tabela do Supabase
- */
 async function registrarLog(level: 'INFO' | 'SUCESSO' | 'ERRO', message: string) {
   const timestamp = new Date().toLocaleTimeString();
   console.log(`[RPA] [${timestamp}] [${level}] ${message}`);
-
   try {
-    await axios.post(
-      `${SUPABASE_URL}/rest/v1/robo_logs`,
-      {
-        level: level,
-        message: `[${timestamp}] ${message}`,
-        contexto: {}
-      },
-      {
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        }
-      }
-    );
-  } catch (error: any) {
-    console.error(`[RPA ERR] Erro ao persistir log no Supabase:`, error.message);
-  }
+    await axios.post(`${SUPABASE_URL}/rest/v1/robo_logs`, { level, message: `[${timestamp}] ${message}`, contexto: {} }, {
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }
+    });
+  } catch (error: any) { console.error(`[RPA ERR] Erro no log:`, error.message); }
 }
 
-/**
- * Atualiza o status do robô usando um UPDATE seguro via API do Supabase
- */
-async function enviarHeartbeat(status: string) {
+async function atualizarStatusBanco(id: string, novoStatus: string, qrCodeUrl: string | null = null) {
+  const body: any = { status: novoStatus };
+  if (qrCodeUrl) body.qr_code_url = qrCodeUrl;
+  
+  await axios.patch(`${SUPABASE_URL}/rest/v1/robo_bancos_config?id=eq.${id}`, body, {
+    headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' }
+  });
+}
+
+async function buscarBancosPendentes() {
   try {
-    await axios.patch(
-      `${SUPABASE_URL}/rest/v1/robo_heartbeat?id=eq.${HEARTBEAT_ID}`,
-      {
-        status_atual: status,
-        ultima_atividade: new Date().toISOString()
-      },
-      {
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        }
-      }
-    );
+    const { data } = await axios.get(`${SUPABASE_URL}/rest/v1/robo_bancos_config?status=eq.pendente`, {
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    return data;
   } catch (error: any) {
-    console.error(`[RPA ERR] Erro ao enviar Heartbeat:`, error.message);
+    await registrarLog('ERRO', `Falha ao buscar pendências: ${error.message}`);
+    return [];
   }
 }
 
 export async function executarRobo() {
-  if (isExecuting) {
-    await registrarLog('INFO', 'Varredura já em andamento. Pulando este ciclo.');
-    return;
-  }
-
+  if (isExecuting) return;
   isExecuting = true;
-  await enviarHeartbeat('executando');
-  await registrarLog('INFO', 'Iniciando ciclo de varredura nos bancos...');
+  
+  const pendencias = await buscarBancosPendentes();
+  
+  for (const banco of pendencias) {
+    await registrarLog('INFO', `Iniciando autorização automática para: ${banco.nome_banco}`);
+    await atualizarStatusBanco(banco.id, 'processando');
+    
+    let browser;
+    try {
+      browser = await puppeteer.launch({ 
+        headless: "new", 
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] 
+      });
+      
+      const page = await browser.newPage();
+      
+      // LOGICA DE NAVEGAÇÃO (Adicione aqui o seu page.goto())
+      // await page.goto(banco.url_login); 
 
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+      // BUSCA DINÂMICA: O robô procura pelo elemento que contém as palavras de autorização
+      const linkAutenticacao = await page.evaluate(() => {
+        const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
+        const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
+        
+        const elementoAlvo = elementos.find(el => 
+          palavrasChave.some(texto => el.textContent?.includes(texto) || (el as HTMLImageElement).alt?.includes(texto))
+        );
 
-    await registrarLog('INFO', 'Navegador Puppeteer aberto com sucesso.');
-    await registrarLog('SUCESSO', 'Varredura de teste concluída. Painel conectado.');
+        return (elementoAlvo as HTMLAnchorElement)?.href || (elementoAlvo as HTMLImageElement)?.src;
+      });
 
-  } catch (error: any) {
-    await registrarLog('ERRO', `Falha na execução do robô: ${error.message}`);
-    await enviarHeartbeat('erro');
-  } finally {
-    if (browser) {
-      await browser.close();
-      await registrarLog('INFO', 'Navegador fechado. Aguardando próxima chamada.');
+      if (!linkAutenticacao) throw new Error("Não foi possível encontrar o botão de autorização/QR Code na página.");
+      
+      // Gera o QR Code em Base64
+      const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
+      
+      await registrarLog('SUCESSO', `QR Code gerado automaticamente para ${banco.nome_banco}.`);
+      await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
+      
+    } catch (error: any) {
+      await registrarLog('ERRO', `Falha em ${banco.nome_banco}: ${error.message}`);
+      await atualizarStatusBanco(banco.id, 'erro');
+    } finally {
+      if (browser) await browser.close();
     }
-    isExecuting = false;
-    await enviarHeartbeat('online');
   }
+  isExecuting = false;
 }
 
-// Executa imediatamente ao iniciar o worker de forma independente
 if (require.main === module) {
-  console.log("[RPA] Módulo do Robô Extrator ativo de forma independente.");
+  setInterval(executarRobo, 5000);
   executarRobo();
-  // Mantém o processo rodando a cada 30 segundos para teste
-  setInterval(executarRobo, 30000);
 }
