@@ -55,13 +55,11 @@ async function executarRobo() {
         let browser;
         try {
             browser = await puppeteer_1.default.launch({
-                headless: true, // Alterado para true
+                headless: true,
                 args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
             });
             const page = await browser.newPage();
-            // LOGICA DE NAVEGAÇÃO (Adicione aqui o seu page.goto())
             await page.goto(banco.url_login);
-            // BUSCA DINÂMICA: O robô procura pelo elemento que contém as palavras de autorização
             const linkAutenticacao = await page.evaluate(() => {
                 const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
                 const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
@@ -70,7 +68,6 @@ async function executarRobo() {
             });
             if (!linkAutenticacao)
                 throw new Error("Não foi possível encontrar o botão de autorização/QR Code na página.");
-            // Gera o QR Code em Base64
             const qrCodeBase64 = await qrcode_1.default.toDataURL(linkAutenticacao);
             await registrarLog('SUCESSO', `QR Code gerado automaticamente para ${banco.nome_banco}.`);
             await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
@@ -86,7 +83,6 @@ async function executarRobo() {
     }
     isExecuting = false;
 }
-await registrarLog('INFO', 'TESTE: O robô iniciou com sucesso!');
 if (require.main === module) {
     setInterval(executarRobo, 5000);
     executarRobo();

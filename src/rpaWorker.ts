@@ -41,9 +41,6 @@ async function buscarBancosPendentes() {
 }
 
 export async function executarRobo() {
-  // LOG DE TESTE AQUI DENTRO
-  await registrarLog('INFO', 'TESTE: Função executarRobo foi chamada com sucesso!');
-
   if (isExecuting) return;
   isExecuting = true;
   
@@ -66,15 +63,18 @@ export async function executarRobo() {
       const linkAutenticacao = await page.evaluate(() => {
         const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
         const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
+        
         const elementoAlvo = elementos.find(el => 
           palavrasChave.some(texto => el.textContent?.includes(texto) || (el as HTMLImageElement).alt?.includes(texto))
         );
+
         return (elementoAlvo as HTMLAnchorElement)?.href || (elementoAlvo as HTMLImageElement)?.src;
       });
 
       if (!linkAutenticacao) throw new Error("Não foi possível encontrar o botão de autorização/QR Code na página.");
       
       const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
+      
       await registrarLog('SUCESSO', `QR Code gerado automaticamente para ${banco.nome_banco}.`);
       await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
       
