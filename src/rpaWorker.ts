@@ -53,7 +53,7 @@ export async function executarRobo() {
     let browser;
     try {
       browser = await puppeteer.launch({ 
-        headless: "new", 
+        headless: true, // Alterado para true
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] 
       });
       

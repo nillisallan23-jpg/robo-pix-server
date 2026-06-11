@@ -12,6 +12,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.6",
     "typescript": "^5.7.3"
   }
 }
