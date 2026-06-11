@@ -86,6 +86,7 @@ async function executarRobo() {
     }
     isExecuting = false;
 }
+await registrarLog('INFO', 'TESTE: O robô iniciou com sucesso!');
 if (require.main === module) {
     setInterval(executarRobo, 5000);
     executarRobo();

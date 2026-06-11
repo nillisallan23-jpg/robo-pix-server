@@ -41,6 +41,9 @@ async function buscarBancosPendentes() {
 }
 
 export async function executarRobo() {
+  // LOG DE TESTE AQUI DENTRO
+  await registrarLog('INFO', 'TESTE: Função executarRobo foi chamada com sucesso!');
+
   if (isExecuting) return;
   isExecuting = true;
   
@@ -53,32 +56,25 @@ export async function executarRobo() {
     let browser;
     try {
       browser = await puppeteer.launch({ 
-        headless: true, // Alterado para true
+        headless: true, 
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] 
       });
       
       const page = await browser.newPage();
-      
-      // LOGICA DE NAVEGAÇÃO (Adicione aqui o seu page.goto())
       await page.goto(banco.url_login); 
 
-      // BUSCA DINÂMICA: O robô procura pelo elemento que contém as palavras de autorização
-        const linkAutenticacao = await page.evaluate(() => {
+      const linkAutenticacao = await page.evaluate(() => {
         const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
         const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
-        
         const elementoAlvo = elementos.find(el => 
           palavrasChave.some(texto => el.textContent?.includes(texto) || (el as HTMLImageElement).alt?.includes(texto))
         );
-
         return (elementoAlvo as HTMLAnchorElement)?.href || (elementoAlvo as HTMLImageElement)?.src;
       });
 
       if (!linkAutenticacao) throw new Error("Não foi possível encontrar o botão de autorização/QR Code na página.");
       
-      // Gera o QR Code em Base64
       const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
-      
       await registrarLog('SUCESSO', `QR Code gerado automaticamente para ${banco.nome_banco}.`);
       await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
       
