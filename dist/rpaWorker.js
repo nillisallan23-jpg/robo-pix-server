@@ -14,14 +14,25 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 let isExecuting = false;
 async function registrarLog(level, message) {
     const timestamp = new Date().toLocaleTimeString();
-    console.log(`[RPA] [${timestamp}] [${level}] ${message}`);
+    const msgFormatada = `[${timestamp}] ${message}`;
+    console.log(`[RPA] [${level}] ${msgFormatada}`);
     try {
-        await axios_1.default.post(`${SUPABASE_URL}/rest/v1/robo_logs`, { level, message: `[${timestamp}] ${message}`, contexto: {} }, {
-            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }
+        await axios_1.default.post(`${SUPABASE_URL}/rest/v1/robo_logs`, { level, message: msgFormatada, contexto: {} }, {
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+            }
         });
     }
     catch (error) {
-        console.error(`[RPA ERR] Erro no log:`, error.message);
+        if (error.response) {
+            console.error(`[RPA ERR] Resposta do Supabase:`, JSON.stringify(error.response.data));
+        }
+        else {
+            console.error(`[RPA ERR] Erro de conexão:`, error.message);
+        }
     }
 }
 async function atualizarStatusBanco(id, novoStatus, qrCodeUrl = null) {
