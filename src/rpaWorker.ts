@@ -27,11 +27,7 @@ async function registrarLog(level: 'INFO' | 'SUCESSO' | 'ERRO', message: string)
       }
     );
   } catch (error: any) { 
-    if (error.response) {
-      console.error(`[RPA ERR] Resposta do Supabase:`, JSON.stringify(error.response.data));
-    } else {
-      console.error(`[RPA ERR] Erro de conexão:`, error.message);
-    }
+    console.error(`[CRITICAL] Falha ao registrar log:`, error.message);
   }
 }
 
@@ -51,7 +47,7 @@ async function buscarBancosPendentes() {
     });
     return data;
   } catch (error: any) {
-    await registrarLog('ERRO', `Falha ao buscar pendências: ${error.message}`);
+    console.error("[CRITICAL] Erro ao buscar pendentes:", error.message);
     return [];
   }
 }
@@ -63,51 +59,50 @@ export async function executarRobo() {
   const pendencias = await buscarBancosPendentes();
   
   for (const banco of pendencias) {
-    await registrarLog('INFO', `Iniciando autorização automática para: ${banco.nome_banco}`);
+    // Mapeamento de segurança (ajuste conforme o nome real das colunas no seu banco)
+    const nomeBanco = banco.nome_banco || banco.nomeBanco || 'Banco Desconhecido';
+    const urlLogin = banco.url_login || banco.urlLogin || '';
+
+    await registrarLog('INFO', `Iniciando autorização para: ${nomeBanco}`);
+    
+    // Validação estrita da URL
+    if (!urlLogin || !urlLogin.startsWith('http')) {
+      await registrarLog('ERRO', `Falha em ${nomeBanco}: URL inválida ou ausente (${urlLogin}).`);
+      await atualizarStatusBanco(banco.id, 'erro');
+      continue; 
+    }
+
     await atualizarStatusBanco(banco.id, 'processando');
     
     let browser;
     try {
       browser = await puppeteer.launch({ 
         headless: true, 
-        args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox', 
-          '--disable-dev-shm-usage', 
-          '--disable-gpu',
-          '--no-zygote',          // CRÍTICO para Docker
-          '--single-process'       // Reduz memória
-        ] 
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote', '--single-process'] 
       });
       
       const page = await browser.newPage();
-      
-      // Timeouts de segurança para não travar o robô
       await page.setDefaultNavigationTimeout(30000);
-      await page.setDefaultTimeout(30000);
-      
-      await page.goto(banco.url_login, { waitUntil: 'networkidle2' }); 
+      await page.goto(urlLogin, { waitUntil: 'networkidle2' }); 
 
       const linkAutenticacao = await page.evaluate(() => {
         const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
         const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
-        
         const elementoAlvo = elementos.find(el => 
           palavrasChave.some(texto => el.textContent?.includes(texto) || (el as HTMLImageElement).alt?.includes(texto))
         );
-
         return (elementoAlvo as HTMLAnchorElement)?.href || (elementoAlvo as HTMLImageElement)?.src;
       });
 
-      if (!linkAutenticacao) throw new Error("Não foi possível encontrar o botão de autorização/QR Code na página.");
+      if (!linkAutenticacao) throw new Error("Não foi possível encontrar o botão de autorização.");
       
       const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
       
-      await registrarLog('SUCESSO', `QR Code gerado automaticamente para ${banco.nome_banco}.`);
+      await registrarLog('SUCESSO', `QR Code gerado para ${nomeBanco}.`);
       await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
       
     } catch (error: any) {
-      await registrarLog('ERRO', `Falha em ${banco.nome_banco}: ${error.message}`);
+      await registrarLog('ERRO', `Falha em ${nomeBanco}: ${error.message}`);
       await atualizarStatusBanco(banco.id, 'erro');
     } finally {
       if (browser) await browser.close();
@@ -116,21 +111,7 @@ export async function executarRobo() {
   isExecuting = false;
 }
 
-// Inicialização
-console.log("[RPA] Serviço inicializado com sucesso. Iniciando loops...");
-
-// Heartbeat local
-setInterval(() => {
-  console.log(`[HEARTBEAT] [${new Date().toLocaleTimeString()}] Worker ativo. Executando? ${isExecuting}`);
-}, 60000);
-
-// Loop principal
-setInterval(async () => {
-  try {
-    await executarRobo();
-  } catch (err) {
-    console.error("[CRITICAL ERR] Erro não tratado no setInterval:", err);
-  }
-}, 5000);
-
+console.log("[RPA] Serviço inicializado.");
+setInterval(() => { console.log(`[HEARTBEAT] Executando: ${isExecuting}`); }, 60000);
+setInterval(executarRobo, 5000);
 executarRobo();
