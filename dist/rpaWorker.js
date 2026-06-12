@@ -67,10 +67,20 @@ async function executarRobo() {
         try {
             browser = await puppeteer_1.default.launch({
                 headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--no-zygote', // CRÍTICO para Docker
+                    '--single-process' // Reduz memória
+                ]
             });
             const page = await browser.newPage();
-            await page.goto(banco.url_login);
+            // Timeouts de segurança para não travar o robô
+            await page.setDefaultNavigationTimeout(30000);
+            await page.setDefaultTimeout(30000);
+            await page.goto(banco.url_login, { waitUntil: 'networkidle2' });
             const linkAutenticacao = await page.evaluate(() => {
                 const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
                 const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
@@ -94,7 +104,19 @@ async function executarRobo() {
     }
     isExecuting = false;
 }
-if (require.main === module) {
-    setInterval(executarRobo, 5000);
-    executarRobo();
-}
+// Inicialização
+console.log("[RPA] Serviço inicializado com sucesso. Iniciando loops...");
+// Heartbeat local
+setInterval(() => {
+    console.log(`[HEARTBEAT] [${new Date().toLocaleTimeString()}] Worker ativo. Executando? ${isExecuting}`);
+}, 60000);
+// Loop principal
+setInterval(async () => {
+    try {
+        await executarRobo();
+    }
+    catch (err) {
+        console.error("[CRITICAL ERR] Erro não tratado no setInterval:", err);
+    }
+}, 5000);
+executarRobo();
