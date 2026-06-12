@@ -1,8 +1,8 @@
-# Usa uma imagem base oficial do Node
 FROM node:18-bookworm-slim
 
-# Instala as dependências do Puppeteer
+# Instala o tini + dependências do Puppeteer
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
     ca-certificates fonts-liberation gconf-service libappindicator1 libasound2 \
     libatk1.0-0 libatomic1 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 \
     libfontconfig1 libgbm1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 \
@@ -11,17 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget \
     xdg-utils xvfb && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Define o diretório de trabalho
 WORKDIR /app
 
-# Copia os arquivos de dependência
 COPY package*.json ./
-
-# Instala as dependências do Node
 RUN npm ci
 
-# Copia o restante do código
 COPY . .
 
-# Comando para iniciar (ajuste se o caminho do seu arquivo js for diferente)
+# Usar o Tini como entrypoint garante que nenhum processo do Chromium trave o container
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
 CMD ["node", "dist/rpaWorker.js"]
