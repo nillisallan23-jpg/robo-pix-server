@@ -17,7 +17,22 @@ const supabase = axios.create({
 
 let isExecuting = false;
 
-async function atualizarStatus(id: string, status: 'aguardando_leitura' | 'erro', extra: Record<string, any> = {}) {
+// Seletores comuns de QR Code. Ajuste/adicione conforme o banco.
+const QR_SELECTORS = [
+  'img[alt*="QR" i]',
+  'img[src^="data:image"]',
+  'canvas[class*="qr" i]',
+  'canvas',
+  '[class*="qrcode" i] img',
+  '[data-testid*="qr" i] img'
+];
+const QR_TIMEOUT_MS = 25000;
+
+async function atualizarStatus(
+  id: string,
+  status: 'aguardando_leitura' | 'erro',
+  extra: Record<string, any> = {}
+) {
   try {
     await supabase.patch(
       `/rest/v1/robo_bancos_config?id=eq.${id}`,
@@ -27,6 +42,44 @@ async function atualizarStatus(id: string, status: 'aguardando_leitura' | 'erro'
   } catch (e: any) {
     console.error(`[ERRO] Falha ao atualizar status do banco ${id}:`, e.message);
   }
+}
+
+async function capturarQRCode(page: any): Promise<string | null> {
+  const deadline = Date.now() + QR_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    for (const selector of QR_SELECTORS) {
+      const handle = await page.$(selector);
+      if (!handle) continue;
+
+      try {
+        const tagName = await handle.evaluate((el: Element) => el.tagName);
+
+        if (tagName === 'IMG') {
+          const src = await handle.evaluate((el: HTMLImageElement) => el.src);
+          if (src && (src.startsWith('data:image') || src.startsWith('http'))) {
+            console.log(`[QR] Capturado via <img> (${selector})`);
+            return src;
+          }
+        }
+
+        if (tagName === 'CANVAS') {
+          const dataUrl = await handle.evaluate(
+            (el: HTMLCanvasElement) => el.toDataURL('image/png')
+          );
+          // canvas vazio resulta num data:URL muito curto
+          if (dataUrl && dataUrl.length > 500) {
+            console.log(`[QR] Capturado via <canvas> (${selector})`);
+            return dataUrl;
+          }
+        }
+      } catch {
+        // segue tentando outros seletores
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return null;
 }
 
 export async function executarRobo() {
@@ -66,8 +119,15 @@ export async function executarRobo() {
           timeout: 30000
         });
 
-        console.log(`[OK] Página carregada para banco ${banco.id}`);
-        await atualizarStatus(banco.id, 'aguardando_leitura');
+        console.log(`[OK] Página carregada para banco ${banco.id}. Aguardando QR Code...`);
+        const qrCode = await capturarQRCode(page);
+
+        if (qrCode) {
+          await atualizarStatus(banco.id, 'aguardando_leitura', { qr_code_url: qrCode });
+        } else {
+          console.error(`[ERRO] QR Code não encontrado para banco ${banco.id} (timeout).`);
+          await atualizarStatus(banco.id, 'erro');
+        }
       } catch (navErr: any) {
         console.error(`[ERRO] Falha na navegação do banco ${banco.id}:`, navErr.message);
         await atualizarStatus(banco.id, 'erro');
