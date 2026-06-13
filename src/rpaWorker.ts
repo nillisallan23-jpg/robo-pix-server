@@ -9,7 +9,6 @@ const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 let isExecuting = false;
 
-// Função de log blindada
 async function registrarLog(level: 'INFO' | 'SUCESSO' | 'ERRO', message: string) {
   const timestamp = new Date().toLocaleTimeString();
   const msgFormatada = `[${timestamp}] ${message}`;
@@ -28,7 +27,7 @@ async function registrarLog(level: 'INFO' | 'SUCESSO' | 'ERRO', message: string)
       }
     );
   } catch (error: any) { 
-    console.error(`[CRITICAL] Falha ao enviar log para Supabase: ${error.message}`);
+    console.error(`[CRITICAL] Falha ao enviar log: ${error.message}`);
   }
 }
 
@@ -50,7 +49,6 @@ async function atualizarStatusBanco(id: string, novoStatus: string, qrCodeUrl: s
   }
 }
 
-// BUSCA COM LOG DE DADOS BRUTOS PARA DIAGNÓSTICO
 async function buscarBancosPendentes() {
   const url = `${SUPABASE_URL}/rest/v1/robo_bancos_config`; 
   
@@ -65,11 +63,9 @@ async function buscarBancosPendentes() {
       timeout: 10000 
     });
     
-    // LOG CRÍTICO: Imprime tudo que o banco retorna
-    console.log(`[DEBUG] Conteúdo bruto recebido do Supabase:`, JSON.stringify(response.data));
     return response.data || [];
   } catch (error: any) {
-    console.error(`[CRITICAL] Erro na requisição ao Supabase:`, error.message);
+    console.error(`[CRITICAL] Erro na requisição:`, error.message);
     return [];
   }
 }
@@ -81,13 +77,15 @@ export async function executarRobo() {
   try {
     const todosOsBancos = await buscarBancosPendentes();
     
-    // FILTRO MANUAL (Mais seguro que o filtro na URL)
-    const pendencias = todosOsBancos.filter((b: any) => String(b.status).trim() === 'pendente');
-    console.log(`[DEBUG] Bancos pendentes encontrados após filtro manual: ${pendencias.length}`);
+    // FILTRO ATUALIZADO: Aceita 'pendente' OU 'processando'
+    const pendencias = todosOsBancos.filter((b: any) => {
+      const s = String(b.status).trim();
+      return s === 'pendente' || s === 'processando';
+    });
+    
+    console.log(`[DEBUG] Bancos encontrados para processar: ${pendencias.length}`);
     
     for (const banco of pendencias) {
-      console.log(`[DEBUG] Analisando objeto banco:`, JSON.stringify(banco));
-      
       const nomeBanco = banco.banco_nome || banco.nome_banco || 'Banco Desconhecido';
       const urlLogin = banco.url_login || banco.urlLogin || '';
 
@@ -97,7 +95,7 @@ export async function executarRobo() {
         continue;
       }
 
-      await registrarLog('INFO', `Iniciando: ${nomeBanco}`);
+      await registrarLog('INFO', `Iniciando processamento: ${nomeBanco}`);
       await atualizarStatusBanco(banco.id, 'processando');
       
       let browser;
@@ -118,7 +116,7 @@ export async function executarRobo() {
           return (alvo as HTMLAnchorElement)?.href || (alvo as HTMLImageElement)?.src;
         });
 
-        if (!linkAutenticacao) throw new Error("Botão de autorização não encontrado na página.");
+        if (!linkAutenticacao) throw new Error("Botão não encontrado na página.");
         
         const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
         await registrarLog('SUCESSO', `QR Code gerado para ${nomeBanco}.`);
@@ -132,13 +130,13 @@ export async function executarRobo() {
       }
     }
   } catch (err) {
-    console.error("[CRITICAL] Erro inesperado na função executarRobo:", err);
+    console.error("[CRITICAL] Erro inesperado:", err);
   } finally {
     isExecuting = false;
   }
 }
 
-console.log("[RPA] Serviço inicializado com sucesso.");
+console.log("[RPA] Serviço inicializado.");
 setInterval(() => { console.log(`[HEARTBEAT] Executando: ${isExecuting}`); }, 60000);
 setInterval(executarRobo, 5000);
 executarRobo();
