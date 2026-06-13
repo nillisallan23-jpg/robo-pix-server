@@ -37,39 +37,37 @@ async function atualizarStatusBanco(id, novoStatus, qrCodeUrl = null) {
         if (qrCodeUrl)
             body.qr_code_url = qrCodeUrl;
         await axios_1.default.patch(`${SUPABASE_URL}/rest/v1/robo_bancos_config?id=eq.${id}`, body, {
-            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' }
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                'Content-Type': 'application/json',
+                'Accept-Profile': 'public'
+            }
         });
     }
     catch (error) {
         console.error(`[CRITICAL] Falha ao atualizar status: ${error.message}`);
     }
 }
-// LOGS DE CONEXÃO CRÍTICOS
+// BUSCA COM LOG DE DADOS BRUTOS PARA DIAGNÓSTICO
 async function buscarBancosPendentes() {
-    const url = `${SUPABASE_URL}/rest/v1/robo_bancos_config?status=eq.pendente`;
-    console.log(`[DEBUG] Tentando conexão com Supabase em: ${url}`);
+    const url = `${SUPABASE_URL}/rest/v1/robo_bancos_config`;
     try {
         const response = await axios_1.default.get(url, {
             headers: {
                 'apikey': SUPABASE_ANON_KEY,
                 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept-Profile': 'public'
             },
             timeout: 10000
         });
-        console.log(`[DEBUG] Conexão bem-sucedida! Status: ${response.status}. Bancos encontrados: ${response.data?.length}`);
+        // LOG CRÍTICO: Imprime tudo que o banco retorna
+        console.log(`[DEBUG] Conteúdo bruto recebido do Supabase:`, JSON.stringify(response.data));
         return response.data || [];
     }
     catch (error) {
-        if (error.response) {
-            console.error(`[CRITICAL] Supabase respondeu com erro (${error.response.status}):`, JSON.stringify(error.response.data));
-        }
-        else if (error.request) {
-            console.error(`[CRITICAL] Nenhuma resposta do servidor (Verifique se a URL está correta):`, error.message);
-        }
-        else {
-            console.error(`[CRITICAL] Erro na configuração da requisição:`, error.message);
-        }
+        console.error(`[CRITICAL] Erro na requisição ao Supabase:`, error.message);
         return [];
     }
 }
@@ -78,9 +76,13 @@ async function executarRobo() {
         return;
     isExecuting = true;
     try {
-        const pendencias = await buscarBancosPendentes();
+        const todosOsBancos = await buscarBancosPendentes();
+        // FILTRO MANUAL (Mais seguro que o filtro na URL)
+        const pendencias = todosOsBancos.filter((b) => String(b.status).trim() === 'pendente');
+        console.log(`[DEBUG] Bancos pendentes encontrados após filtro manual: ${pendencias.length}`);
         for (const banco of pendencias) {
-            const nomeBanco = banco.nome_banco || banco.nomeBanco || 'Banco Desconhecido';
+            console.log(`[DEBUG] Analisando objeto banco:`, JSON.stringify(banco));
+            const nomeBanco = banco.banco_nome || banco.nome_banco || 'Banco Desconhecido';
             const urlLogin = banco.url_login || banco.urlLogin || '';
             if (!urlLogin || !urlLogin.startsWith('http')) {
                 await registrarLog('ERRO', `Banco ${nomeBanco} ignorado: URL inválida (${urlLogin})`);
@@ -105,7 +107,7 @@ async function executarRobo() {
                     return alvo?.href || alvo?.src;
                 });
                 if (!linkAutenticacao)
-                    throw new Error("Botão não encontrado na página.");
+                    throw new Error("Botão de autorização não encontrado na página.");
                 const qrCodeBase64 = await qrcode_1.default.toDataURL(linkAutenticacao);
                 await registrarLog('SUCESSO', `QR Code gerado para ${nomeBanco}.`);
                 await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
@@ -127,7 +129,6 @@ async function executarRobo() {
         isExecuting = false;
     }
 }
-// Heartbeat
 console.log("[RPA] Serviço inicializado com sucesso.");
 setInterval(() => { console.log(`[HEARTBEAT] Executando: ${isExecuting}`); }, 60000);
 setInterval(executarRobo, 5000);

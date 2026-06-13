@@ -50,10 +50,9 @@ async function atualizarStatusBanco(id: string, novoStatus: string, qrCodeUrl: s
   }
 }
 
-// BUSCA SEM FILTRO PARA TESTE
+// BUSCA COM LOG DE DADOS BRUTOS PARA DIAGNÓSTICO
 async function buscarBancosPendentes() {
-  const url = `${SUPABASE_URL}/rest/v1/robo_bancos_config`; // URL SEM O FILTRO ?status=eq.pendente
-  console.log(`[DEBUG] Tentando buscar tudo em: ${url}`);
+  const url = `${SUPABASE_URL}/rest/v1/robo_bancos_config`; 
   
   try {
     const response = await axios.get(url, {
@@ -66,10 +65,11 @@ async function buscarBancosPendentes() {
       timeout: 10000 
     });
     
-    console.log(`[DEBUG] Conexão bem-sucedida! Bancos totais encontrados: ${response.data?.length}`);
+    // LOG CRÍTICO: Imprime tudo que o banco retorna
+    console.log(`[DEBUG] Conteúdo bruto recebido do Supabase:`, JSON.stringify(response.data));
     return response.data || [];
   } catch (error: any) {
-    console.error(`[CRITICAL] Erro na busca sem filtro:`, error.message);
+    console.error(`[CRITICAL] Erro na requisição ao Supabase:`, error.message);
     return [];
   }
 }
@@ -79,29 +79,60 @@ export async function executarRobo() {
   isExecuting = true;
   
   try {
-    const bancos = await buscarBancosPendentes();
+    const todosOsBancos = await buscarBancosPendentes();
     
-    // Filtro manual no código para garantir que só pegamos os "pendentes"
-    const pendencias = bancos.filter((b: any) => b.status === 'pendente');
-    console.log(`[DEBUG] Após filtro manual, bancos pendentes: ${pendencias.length}`);
+    // FILTRO MANUAL (Mais seguro que o filtro na URL)
+    const pendencias = todosOsBancos.filter((b: any) => String(b.status).trim() === 'pendente');
+    console.log(`[DEBUG] Bancos pendentes encontrados após filtro manual: ${pendencias.length}`);
     
     for (const banco of pendencias) {
-      const nomeBanco = banco.banco_nome || banco.nome_banco || banco.nomeBanco || 'Banco Desconhecido';
+      console.log(`[DEBUG] Analisando objeto banco:`, JSON.stringify(banco));
+      
+      const nomeBanco = banco.banco_nome || banco.nome_banco || 'Banco Desconhecido';
       const urlLogin = banco.url_login || banco.urlLogin || '';
 
       if (!urlLogin || !urlLogin.startsWith('http')) {
         await registrarLog('ERRO', `Banco ${nomeBanco} ignorado: URL inválida (${urlLogin})`);
+        await atualizarStatusBanco(banco.id, 'erro');
         continue;
       }
 
       await registrarLog('INFO', `Iniciando: ${nomeBanco}`);
       await atualizarStatusBanco(banco.id, 'processando');
       
-      // ... (Restante da lógica do Puppeteer mantida igual)
-      // O código Puppeteer continua igual ao que você já tem...
+      let browser;
+      try {
+        browser = await puppeteer.launch({ 
+          headless: true, 
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote', '--single-process'] 
+        });
+        
+        const page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(30000);
+        await page.goto(urlLogin, { waitUntil: 'networkidle2' }); 
+
+        const linkAutenticacao = await page.evaluate(() => {
+          const palavrasChave = ['Autorizar', 'Conectar', 'Confirmar', 'QR Code', 'Acesso'];
+          const elementos = Array.from(document.querySelectorAll('a, button, div, img'));
+          const alvo = elementos.find(el => palavrasChave.some(t => el.textContent?.includes(t)));
+          return (alvo as HTMLAnchorElement)?.href || (alvo as HTMLImageElement)?.src;
+        });
+
+        if (!linkAutenticacao) throw new Error("Botão de autorização não encontrado na página.");
+        
+        const qrCodeBase64 = await QRCode.toDataURL(linkAutenticacao);
+        await registrarLog('SUCESSO', `QR Code gerado para ${nomeBanco}.`);
+        await atualizarStatusBanco(banco.id, 'aguardando_leitura', qrCodeBase64);
+        
+      } catch (error: any) {
+        await registrarLog('ERRO', `Falha em ${nomeBanco}: ${error.message}`);
+        await atualizarStatusBanco(banco.id, 'erro');
+      } finally {
+        if (browser) await browser.close();
+      }
     }
   } catch (err) {
-    console.error("[CRITICAL] Erro inesperado:", err);
+    console.error("[CRITICAL] Erro inesperado na função executarRobo:", err);
   } finally {
     isExecuting = false;
   }
