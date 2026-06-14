@@ -17,7 +17,6 @@ const supabase = axios.create({
 
 let isExecuting = false;
 
-// ---------- QR Code ----------
 const QR_SELECTORS = [
   'img[alt*="QR" i]',
   'img[src^="data:image"]',
@@ -28,15 +27,11 @@ const QR_SELECTORS = [
 ];
 const QR_TIMEOUT_MS = 25000;
 
-// ---------- Mapa de bancos ----------
-// Para cada banco: seletores possíveis de cada campo + botão de submit.
-// A ordem importa: o robô tenta o primeiro que existir na página.
 type CampoBanco = 'cpf' | 'cnpj' | 'agencia' | 'conta' | 'senha';
 
 interface BancoMapa {
   campos: Partial<Record<CampoBanco, string[]>>;
   submit: string[];
-  // texto visível usado como fallback para achar o botão
   submitTexto?: string[];
 }
 
@@ -66,7 +61,6 @@ const MAPA_BANCOS: Record<string, BancoMapa> = {
     submit: ['button[type="submit"]'],
     submitTexto: ['Acessar', 'Entrar']
   },
-  // fallback genérico
   default: {
     campos: {
       cpf: ['input[name*="cpf" i]', 'input[type="tel"]'],
@@ -88,7 +82,6 @@ function resolverMapa(bancoNome: string): BancoMapa {
   return MAPA_BANCOS.default;
 }
 
-// ---------- Helpers ----------
 async function acharCampo(page: any, seletores: string[]) {
   for (const sel of seletores) {
     const el = await page.$(sel);
@@ -101,13 +94,12 @@ async function clicarBotao(page: any, mapa: BancoMapa): Promise<boolean> {
   for (const sel of mapa.submit) {
     const btn = await page.$(sel);
     if (btn) {
-      console.log(`[FORM] Clicando botão via seletor: ${sel}`);
       await btn.click();
       return true;
     }
   }
   if (mapa.submitTexto?.length) {
-    const clicado = await page.evaluate((textos: string[]) => {
+    return await page.evaluate((textos: string[]) => {
       const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
       for (const b of btns) {
         const txt = (b.textContent || (b as HTMLInputElement).value || '').trim().toLowerCase();
@@ -118,55 +110,29 @@ async function clicarBotao(page: any, mapa: BancoMapa): Promise<boolean> {
       }
       return false;
     }, mapa.submitTexto);
-    if (clicado) {
-      console.log(`[FORM] Clicado por texto: ${mapa.submitTexto.join('|')}`);
-      return true;
-    }
   }
   return false;
 }
 
 async function preencherFormulario(page: any, banco: any): Promise<{ ok: boolean; motivo?: string }> {
   const mapa = resolverMapa(banco.banco_nome);
+  const dados = { cpf: banco.cpf, cnpj: banco.cnpj, agencia: banco.agencia, conta: banco.conta, senha: banco.senha };
 
-  const dados: Partial<Record<CampoBanco, string>> = {
-    cpf: banco.cpf,
-    cnpj: banco.cnpj,
-    agencia: banco.agencia,
-    conta: banco.conta,
-    senha: banco.senha
-  };
-
-  let preenchidos = 0;
   for (const campo of Object.keys(mapa.campos) as CampoBanco[]) {
     const valor = dados[campo];
-    if (!valor) {
-      console.log(`[FORM] Campo "${campo}" não cadastrado no Supabase — pulando.`);
-      continue;
-    }
+    if (!valor || valor.trim() === '') continue; 
+
     const seletores = mapa.campos[campo] || [];
     const achado = await acharCampo(page, seletores);
-    if (!achado) {
-      console.warn(`[FORM] Campo "${campo}" não encontrado na página (seletores: ${seletores.join(', ')}).`);
-      continue;
+    if (achado) {
+      await achado.el.click({ clickCount: 3 }).catch(() => {});
+      await achado.el.type(String(valor), { delay: 30 });
+      console.log(`[FORM] Preenchido "${campo}"`);
     }
-    await achado.el.click({ clickCount: 3 }).catch(() => {});
-    await achado.el.type(String(valor), { delay: 30 });
-    console.log(`[FORM] Preenchido "${campo}" em ${achado.sel}`);
-    preenchidos++;
   }
 
-  if (preenchidos === 0) {
-    return { ok: false, motivo: 'Nenhum campo preenchido (dados ausentes ou seletores incompatíveis).' };
-  }
-
-  const clicou = await clicarBotao(page, mapa);
-  if (!clicou) return { ok: false, motivo: 'Botão de acesso não encontrado.' };
-
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {
-    console.log('[FORM] Sem navegação após clique — seguindo para captura do QR.');
-  });
-
+  await clicarBotao(page, mapa);
+  await new Promise(r => setTimeout(r, 3000)); // Aguarda renderização pós-interação
   return { ok: true };
 }
 
@@ -193,83 +159,35 @@ async function capturarQRCode(page: any): Promise<string | null> {
   return null;
 }
 
-async function atualizarStatus(
-  id: string,
-  status: 'aguardando_leitura' | 'erro',
-  extra: Record<string, any> = {}
-) {
+async function atualizarStatus(id: string, status: 'aguardando_leitura' | 'erro', extra: Record<string, any> = {}) {
   try {
-    await supabase.patch(
-      `/rest/v1/robo_bancos_config?id=eq.${id}`,
-      { status, ...extra, updated_at: new Date().toISOString() }
-    );
-    console.log(`[LOG] Status do banco ${id} -> ${status}`);
-  } catch (e: any) {
-    console.error(`[ERRO] Falha ao atualizar status do banco ${id}:`, e.message);
-  }
+    await supabase.patch(`/rest/v1/robo_bancos_config?id=eq.${id}`, { status, ...extra, updated_at: new Date().toISOString() });
+  } catch {}
 }
 
-// ---------- Loop principal ----------
 export async function executarRobo() {
   if (isExecuting) return;
   isExecuting = true;
-
   try {
     const { data: todosOsBancos } = await supabase.get('/rest/v1/robo_bancos_config');
-    const pendencias = (todosOsBancos || []).filter((b: any) =>
-      ['pendente', 'erro'].includes(String(b.status).trim().toLowerCase())
-    );
-    console.log(`[LOG] Bancos para processar: ${pendencias.length}`);
-
+    const pendencias = (todosOsBancos || []).filter((b: any) => ['pendente', 'erro'].includes(String(b.status).trim().toLowerCase()));
+    
     for (const banco of pendencias) {
-      console.log(`[DEBUG] Banco ${banco.id} (${banco.banco_nome}) status=${banco.status}`);
-
-      if (!banco.url_login) {
-        await atualizarStatus(banco.id, 'erro');
-        continue;
-      }
-
       let browser;
       try {
-        browser = await puppeteer.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
+        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 800 });
-
-        console.log(`[NAV] ${banco.url_login}`);
         await page.goto(banco.url_login, { waitUntil: 'networkidle2', timeout: 30000 });
-
-        const form = await preencherFormulario(page, banco);
-        if (!form.ok) {
-          console.error(`[ERRO] Formulário do banco ${banco.id}: ${form.motivo}`);
-          console.log('URL:', page.url(), '| Título:', await page.title());
-          await atualizarStatus(banco.id, 'erro');
-          continue;
-        }
-
+        
+        await preencherFormulario(page, banco);
         const qrCode = await capturarQRCode(page);
-        if (qrCode) {
-          await atualizarStatus(banco.id, 'aguardando_leitura', { qr_code_url: qrCode });
-        } else {
-          console.error(`[ERRO] QR não encontrado para banco ${banco.id}`);
-          console.log('URL:', page.url(), '| Título:', await page.title());
-          console.log('Frames:', page.frames().map((f: any) => f.url()));
-          await atualizarStatus(banco.id, 'erro');
-        }
-      } catch (navErr: any) {
-        console.error(`[ERRO] Navegação banco ${banco.id}:`, navErr.message);
-        await atualizarStatus(banco.id, 'erro');
-      } finally {
-        if (browser) { try { await browser.close(); } catch {} }
-      }
+        
+        if (qrCode) await atualizarStatus(banco.id, 'aguardando_leitura', { qr_code_url: qrCode });
+        else await atualizarStatus(banco.id, 'erro');
+      } catch (e) { await atualizarStatus(banco.id, 'erro'); }
+      finally { if (browser) await browser.close(); }
     }
-  } catch (err: any) {
-    console.error('[ERRO] Ciclo:', err.message);
-  } finally {
-    isExecuting = false;
-  }
+  } finally { isExecuting = false; }
 }
 
 setInterval(executarRobo, 10000);
