@@ -19,6 +19,7 @@ const supabase = axios_1.default.create({
     timeout: 15000
 });
 let isExecuting = false;
+// ---------- QR Code ----------
 const QR_SELECTORS = [
     'img[alt*="QR" i]',
     'img[src^="data:image"]',
@@ -31,28 +32,11 @@ const QR_TIMEOUT_MS = 25000;
 const MAPA_BANCOS = {
     nubank: {
         campos: {
-            cpf: ['input[name="cpf"]', 'input[type="tel"]', 'input[type="text"]'],
+            cpf: ['input[name="cpf"]', 'input[type="tel"]', 'input[type="text"]', 'input#input-0'],
             senha: ['input[name="password"]', 'input[type="password"]']
         },
         submit: ['button[type="submit"]', 'button[data-testid*="login" i]'],
         submitTexto: ['Acessar', 'Entrar', 'Continuar']
-    },
-    itau: {
-        campos: {
-            agencia: ['input[name*="agencia" i]', 'input[id*="agencia" i]'],
-            conta: ['input[name*="conta" i]', 'input[id*="conta" i]']
-        },
-        submit: ['button[type="submit"]'],
-        submitTexto: ['Acessar', 'Entrar', 'Continuar']
-    },
-    bradesco: {
-        campos: {
-            agencia: ['input[name*="agencia" i]'],
-            conta: ['input[name*="conta" i]'],
-            cpf: ['input[name*="cpf" i]']
-        },
-        submit: ['button[type="submit"]'],
-        submitTexto: ['Acessar', 'Entrar']
     },
     default: {
         campos: {
@@ -74,6 +58,7 @@ function resolverMapa(bancoNome) {
     }
     return MAPA_BANCOS.default;
 }
+// ---------- Helpers ----------
 async function acharCampo(page, seletores) {
     for (const sel of seletores) {
         const el = await page.$(sel);
@@ -90,24 +75,30 @@ async function clicarBotao(page, mapa) {
             return true;
         }
     }
-    if (mapa.submitTexto?.length) {
-        return await page.evaluate((textos) => {
-            const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
-            for (const b of btns) {
-                const txt = (b.textContent || b.value || '').trim().toLowerCase();
-                if (textos.some(t => txt.includes(t.toLowerCase()))) {
-                    b.click();
-                    return true;
-                }
+    return await page.evaluate((textos) => {
+        const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
+        for (const b of btns) {
+            const txt = (b.textContent || b.value || '').trim().toLowerCase();
+            if (textos.some(t => txt.includes(t.toLowerCase()))) {
+                b.click();
+                return true;
             }
-            return false;
-        }, mapa.submitTexto);
-    }
-    return false;
+        }
+        return false;
+    }, mapa.submitTexto || []);
 }
+// ---------- Função Preencher com Diagnóstico ----------
 async function preencherFormulario(page, banco) {
+    // LOG DE DIAGNÓSTICO
+    console.log("DEBUG - Dados recebidos pelo robô:", JSON.stringify(banco, null, 2));
     const mapa = resolverMapa(banco.banco_nome);
-    const dados = { cpf: banco.cpf, cnpj: banco.cnpj, agencia: banco.agencia, conta: banco.conta, senha: banco.senha };
+    const dados = {
+        cpf: banco.cpf,
+        cnpj: banco.cnpj,
+        agencia: banco.agencia,
+        conta: banco.conta,
+        senha: banco.senha
+    };
     for (const campo of Object.keys(mapa.campos)) {
         const valor = dados[campo];
         if (!valor || valor.trim() === '')
@@ -117,11 +108,14 @@ async function preencherFormulario(page, banco) {
         if (achado) {
             await achado.el.click({ clickCount: 3 }).catch(() => { });
             await achado.el.type(String(valor), { delay: 30 });
-            console.log(`[FORM] Preenchido "${campo}"`);
+            console.log(`[FORM] Preenchido "${campo}" com sucesso.`);
+        }
+        else {
+            console.warn(`[FORM] Campo "${campo}" não encontrado no HTML.`);
         }
     }
     await clicarBotao(page, mapa);
-    await new Promise(r => setTimeout(r, 3000)); // Aguarda renderização pós-interação
+    await new Promise(r => setTimeout(r, 3000));
     return { ok: true };
 }
 async function capturarQRCode(page) {
@@ -129,22 +123,13 @@ async function capturarQRCode(page) {
     while (Date.now() < deadline) {
         for (const selector of QR_SELECTORS) {
             const handle = await page.$(selector);
-            if (!handle)
-                continue;
-            try {
+            if (handle) {
                 const tagName = await handle.evaluate((el) => el.tagName);
-                if (tagName === 'IMG') {
-                    const src = await handle.evaluate((el) => el.src);
-                    if (src && (src.startsWith('data:image') || src.startsWith('http')))
-                        return src;
-                }
-                if (tagName === 'CANVAS') {
-                    const dataUrl = await handle.evaluate((el) => el.toDataURL('image/png'));
-                    if (dataUrl && dataUrl.length > 500)
-                        return dataUrl;
-                }
+                if (tagName === 'IMG')
+                    return await handle.evaluate((el) => el.src);
+                if (tagName === 'CANVAS')
+                    return await handle.evaluate((el) => el.toDataURL('image/png'));
             }
-            catch { }
         }
         await new Promise(r => setTimeout(r, 1000));
     }
@@ -162,7 +147,7 @@ async function executarRobo() {
     isExecuting = true;
     try {
         const { data: todosOsBancos } = await supabase.get('/rest/v1/robo_bancos_config');
-        const pendencias = (todosOsBancos || []).filter((b) => ['pendente', 'erro'].includes(String(b.status).trim().toLowerCase()));
+        const pendencias = (todosOsBancos || []).filter((b) => ['pendente', 'erro'].includes(String(b.status || '').trim().toLowerCase()));
         for (const banco of pendencias) {
             let browser;
             try {
